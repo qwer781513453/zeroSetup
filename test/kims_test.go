@@ -3,30 +3,13 @@ package test
 import (
 	"fmt"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/bnb-chain/zkbnb-setup/phase1"
-	"github.com/consensys/gnark-crypto/ecc/bn254"
-	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/frontend/cs/r1cs"
 )
 
 func TestSetup_kims(t *testing.T) {
-
-	// Compile the circuit
-	var myCircuit Circuit
-	ccs, err := frontend.Compile(bn254.ID.ScalarField(), r1cs.NewBuilder, &myCircuit)
-	if err != nil {
-		t.Error(err)
-	}
-	writer, err := os.Create("circuit.r1cs")
-	if err != nil {
-		t.Error(err)
-	}
-	defer writer.Close()
-	ccs.WriteTo(writer)
 
 	var power byte = 11 //随着power增加约束数量增加，contribute时间增加
 	// 9-120ms 11-430ms in macIntel
