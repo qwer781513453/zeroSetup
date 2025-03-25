@@ -1,15 +1,17 @@
 package test
 
 import (
+	"fmt"
+	"github.com/bnb-chain/zkbnb-setup/keys"
+	"github.com/bnb-chain/zkbnb-setup/phase2"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/std/hash/mimc"
 
-	"github.com/bnb-chain/zkbnb-setup/keys"
 	"github.com/bnb-chain/zkbnb-setup/phase1"
-	"github.com/bnb-chain/zkbnb-setup/phase2"
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark/frontend"
@@ -56,10 +58,12 @@ func TestSetup(t *testing.T) {
 
 	var power byte = 9
 
+	time1 := time.Now()
 	// Initialize to Phase 1
 	if err := phase1.Initialize(power, "0.ph1"); err != nil {
 		t.Error(err)
 	}
+	fmt.Printf("Initialize time: %v", time.Now().Sub(time1))
 
 	// Contribute to Phase 1
 	if err := phase1.Contribute("0.ph1", "1.ph1"); err != nil {

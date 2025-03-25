@@ -272,6 +272,119 @@ func Contribute(inputPath, outputPath string) error {
 	return nil
 }
 
+func ContributeServer(inputPath, outputPath string, tau, alpha, beta, one fr.Element) (string, error) {
+	// Input file
+	inputFile, err := os.Open(inputPath)
+	if err != nil {
+		return "", err
+	}
+	defer inputFile.Close()
+
+	// Output file
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return "", err
+	}
+	defer outputFile.Close()
+
+	// Read/Write header with extra contribution
+	var header Header
+	if err := header.ReadFrom(inputFile); err != nil {
+		return "", err
+	}
+	fmt.Printf("Power := %d and  #Contributions := %d\n", header.Power, header.Contributions)
+	N := int(math.Pow(2, float64(header.Power)))
+	header.Contributions++
+	if err := header.writeTo(outputFile); err != nil {
+		return "", err
+	}
+
+	// Use buffered IO to write parameters efficiently
+	reader := bufio.NewReader(inputFile)
+	writer := bufio.NewWriter(outputFile)
+	defer writer.Flush()
+
+	dec := bn254.NewDecoder(reader)
+	enc := bn254.NewEncoder(writer)
+
+	// Process Tau section
+	//fmt.Println("Processing TauG1")
+	var firstG1 *bn254.G1Affine
+	if firstG1, err = scaleG1(dec, enc, 2*N-1, &tau, nil); err != nil {
+		return "", err
+	}
+	var contribution Contribution
+	contribution.G1.Tau.Set(firstG1)
+
+	// Process AlphaTauG1 section
+	//fmt.Println("Processing AlphaTauG1")
+	if firstG1, err = scaleG1(dec, enc, N, &tau, &alpha); err != nil {
+		return "", err
+	}
+	contribution.G1.Alpha.Set(firstG1)
+
+	// Process BetaTauG1 section
+	//fmt.Println("Processing BetaTauG1")
+	if firstG1, err = scaleG1(dec, enc, N, &tau, &beta); err != nil {
+		return "", err
+	}
+	contribution.G1.Beta.Set(firstG1)
+
+	// Process TauG2 section
+	//fmt.Println("Processing TauG2")
+	var firstG2 *bn254.G2Affine
+	if firstG2, err = scaleG2(dec, enc, N, &tau); err != nil {
+		return "", err
+	}
+	contribution.G2.Tau.Set(firstG2)
+
+	// Process BetaG2 section
+	//fmt.Println("Processing BetaG2")
+	var betaG2 bn254.G2Affine
+	var betaBi big.Int
+	if err := dec.Decode(&betaG2); err != nil {
+		return "", err
+	}
+	beta.BigInt(&betaBi)
+	betaG2.ScalarMultiplication(&betaG2, &betaBi)
+	if err := enc.Encode(&betaG2); err != nil {
+		return "", err
+	}
+	contribution.G2.Beta.Set(&betaG2)
+
+	// Copy old contributions
+	nExistingContributions := int(header.Contributions - 1)
+	var c Contribution
+	for i := 0; i < nExistingContributions; i++ {
+		if _, err := c.ReadFrom(reader); err != nil {
+			return "", err
+		}
+		if _, err := c.writeTo(writer); err != nil {
+			return "", err
+		}
+	}
+
+	// Get hash of previous contribution
+	var prevHash []byte
+	if nExistingContributions == 0 {
+		prevHash = nil
+	} else {
+		prevHash = c.Hash
+	}
+
+	// Generate public keys
+	contribution.PublicKeys.Tau = common.GenPublicKey(tau, prevHash, 1)
+	contribution.PublicKeys.Alpha = common.GenPublicKey(alpha, prevHash, 2)
+	contribution.PublicKeys.Beta = common.GenPublicKey(beta, prevHash, 3)
+	contribution.Hash = computeHash(&contribution)
+
+	// Write the contribution
+	contribution.writeTo(writer)
+
+	fmt.Println("Contribution has been successful!")
+	return hex.EncodeToString(contribution.Hash), nil
+}
+
 func Verify(inputPath, transformedPath string) error {
 	// Input file
 	inputFile, err := os.Open(inputPath)
@@ -326,7 +439,7 @@ func Verify(inputPath, transformedPath string) error {
 	// Verify contributions
 	var current Contribution
 	prev, err := defaultContribution(transformedPath)
-	if err!=nil {
+	if err != nil {
 		return err
 	}
 	for i := 0; i < int(header.Contributions); i++ {
