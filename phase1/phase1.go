@@ -5,13 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
-	"math/big"
-	"os"
-
 	"github.com/bnb-chain/zkbnb-setup/common"
 	"github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
+	"math"
+	"math/big"
+	"os"
 )
 
 func Transform(inputPath, outputPath string, inPower, outPower byte) error {
@@ -313,6 +312,143 @@ func ContributeServer(inputPath, outputPath string, tau, alpha, beta, one fr.Ele
 	if firstG1, err = scaleG1(dec, enc, 2*N-1, &tau, nil); err != nil {
 		return "", err
 	}
+	//fmt.Printf("firstG1.X: %s\n", firstG1.X.String())
+	//fmt.Printf("firstG1.Y: %s\n", firstG1.Y.String())
+	var contribution Contribution
+	contribution.G1.Tau.Set(firstG1)
+
+	// Process AlphaTauG1 section
+	//fmt.Println("Processing AlphaTauG1")
+	if firstG1, err = scaleG1(dec, enc, N, &tau, &alpha); err != nil {
+		return "", err
+	}
+	//fmt.Printf("firstG1.X: %s\n", firstG1.X.String())
+	//fmt.Printf("firstG1.Y: %s\n", firstG1.Y.String())
+	contribution.G1.Alpha.Set(firstG1)
+
+	// Process BetaTauG1 section
+	//fmt.Println("Processing BetaTauG1")
+	if firstG1, err = scaleG1(dec, enc, N, &tau, &beta); err != nil {
+		return "", err
+	}
+	//fmt.Printf("firstG1.X: %s\n", firstG1.X.String())
+	//fmt.Printf("firstG1.Y: %s\n", firstG1.Y.String())
+	contribution.G1.Beta.Set(firstG1)
+
+	// Process TauG2 section
+	//fmt.Println("Processing TauG2")
+	var firstG2 *bn254.G2Affine
+	if firstG2, err = scaleG2(dec, enc, N, &tau); err != nil {
+		return "", err
+	}
+	//fmt.Printf("firstG2.X: %s\n", firstG2.X.String())
+	//fmt.Printf("firstG2.Y: %s\n", firstG2.Y.String())
+	contribution.G2.Tau.Set(firstG2)
+
+	// Process BetaG2 section
+	//fmt.Println("Processing BetaG2")
+	var betaG2 bn254.G2Affine
+	var betaBi big.Int
+	if err := dec.Decode(&betaG2); err != nil {
+		return "", err
+	}
+	beta.BigInt(&betaBi)
+	betaG2.ScalarMultiplication(&betaG2, &betaBi)
+	//fmt.Printf("betaG2.X: %s\n", betaG2.X.String())
+	//fmt.Printf("betaG2.Y: %s\n", betaG2.Y.String())
+	if err := enc.Encode(&betaG2); err != nil {
+		return "", err
+	}
+	contribution.G2.Beta.Set(&betaG2)
+
+	// Copy old contributions
+	nExistingContributions := int(header.Contributions - 1)
+	var c Contribution
+	if nExistingContributions == 1 {
+		if _, err := c.ReadFrom(reader); err != nil {
+			return "", err
+		}
+		if _, err := c.writeTo(writer); err != nil {
+			return "", err
+		}
+	}
+	if nExistingContributions > 1 {
+		if _, err := c.ReadFrom(reader); err != nil {
+			return "", err
+		}
+		if _, err := c.ReadFrom(reader); err != nil {
+			return "", err
+		}
+		if _, err := c.writeTo(writer); err != nil {
+			return "", err
+		}
+	}
+
+	// Get hash of previous contribution
+	var prevHash []byte
+	if nExistingContributions == 0 {
+		prevHash = nil
+	} else {
+		prevHash = c.Hash
+	}
+
+	// Generate public keys
+	var s fr.Element
+	s.SetString("5349450036908408402062633344441795636900283135072291564543572822568951905530")
+	fmt.Println("s:", s.String())
+	contribution.PublicKeys.Tau = common.GenPublicKey_(tau, prevHash, 1, &s)
+	contribution.PublicKeys.Alpha = common.GenPublicKey_(alpha, prevHash, 2, &s)
+	contribution.PublicKeys.Beta = common.GenPublicKey_(beta, prevHash, 3, &s)
+	contribution.Hash = computeHash(&contribution)
+
+	// Write the contribution
+	contribution.writeTo(writer)
+
+	fmt.Println("Contribution has been successful!")
+	return hex.EncodeToString(contribution.Hash), nil
+}
+
+func ContributeServerAll(inputPath, outputPath string, tau, alpha, beta, one fr.Element) (string, error) {
+	// Input file
+	inputFile, err := os.Open(inputPath)
+	if err != nil {
+		return "", err
+	}
+	defer inputFile.Close()
+
+	// Output file
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return "", err
+	}
+	defer outputFile.Close()
+
+	// Read/Write header with extra contribution
+	var header Header
+	if err := header.ReadFrom(inputFile); err != nil {
+		return "", err
+	}
+	fmt.Printf("Power := %d and  #Contributions := %d\n", header.Power, header.Contributions)
+	N := int(math.Pow(2, float64(header.Power)))
+	header.Contributions++
+	if err := header.writeTo(outputFile); err != nil {
+		return "", err
+	}
+
+	// Use buffered IO to write parameters efficiently
+	reader := bufio.NewReader(inputFile)
+	writer := bufio.NewWriter(outputFile)
+	defer writer.Flush()
+
+	dec := bn254.NewDecoder(reader)
+	enc := bn254.NewEncoder(writer)
+
+	// Process Tau section
+	//fmt.Println("Processing TauG1")
+	var firstG1 *bn254.G1Affine
+	if firstG1, err = scaleG1(dec, enc, 2*N-1, &tau, nil); err != nil {
+		return "", err
+	}
 	var contribution Contribution
 	contribution.G1.Tau.Set(firstG1)
 
@@ -373,9 +509,12 @@ func ContributeServer(inputPath, outputPath string, tau, alpha, beta, one fr.Ele
 	}
 
 	// Generate public keys
-	contribution.PublicKeys.Tau = common.GenPublicKey(tau, prevHash, 1)
-	contribution.PublicKeys.Alpha = common.GenPublicKey(alpha, prevHash, 2)
-	contribution.PublicKeys.Beta = common.GenPublicKey(beta, prevHash, 3)
+	var s fr.Element
+	s.SetString("5349450036908408402062633344441795636900283135072291564543572822568951905530")
+	fmt.Println("s:", s.String())
+	contribution.PublicKeys.Tau = common.GenPublicKey_(tau, prevHash, 1, &s)
+	contribution.PublicKeys.Alpha = common.GenPublicKey_(alpha, prevHash, 2, &s)
+	contribution.PublicKeys.Beta = common.GenPublicKey_(beta, prevHash, 3, &s)
 	contribution.Hash = computeHash(&contribution)
 
 	// Write the contribution
@@ -479,6 +618,111 @@ func Verify(inputPath, transformedPath string) error {
 
 	// Verify BetaG2
 	fmt.Println("Verifying powers of BetaG2")
+	if !betaG2.Equal(&current.G2.Beta) {
+		return errors.New("failed verifying update of Beta")
+	}
+
+	fmt.Println("Contributions verification has been successful")
+	return nil
+}
+
+func Verify_(inputPath, transformedPath string) error {
+	// Input file
+	inputFile, err := os.Open(inputPath)
+	if err != nil {
+		return err
+	}
+	defer inputFile.Close()
+
+	// Read header
+	var header Header
+	if err := header.ReadFrom(inputFile); err != nil {
+		return err
+	}
+	fmt.Printf("Power := %d and  #Contributions := %d\n", header.Power, header.Contributions)
+	N := int(math.Pow(2, float64(header.Power)))
+
+	// Use buffered IO to write parameters efficiently
+	buffSize := int(math.Pow(2, 20))
+	reader := bufio.NewReaderSize(inputFile, buffSize)
+	dec := bn254.NewDecoder(reader)
+
+	//fmt.Println("Processing TauG1")
+	tau1L1, tau1L2, err := linearCombinationG1(dec, 2*N-1)
+	if err != nil {
+		return err
+	}
+
+	//fmt.Println("Processing AlphaTauG1")
+	alphaTau1L1, alphaTau1L2, err := linearCombinationG1(dec, N)
+	if err != nil {
+		return err
+	}
+
+	//fmt.Println("Processing BetaTauG1")
+	betaTau1L1, betaTau1L2, err := linearCombinationG1(dec, N)
+	if err != nil {
+		return err
+	}
+
+	//fmt.Println("Processing TauG2")
+	tau2L1, tau2L2, err := linearCombinationG2(dec, N)
+	if err != nil {
+		return err
+	}
+
+	//fmt.Println("Processing BetaG2")
+	var betaG2 bn254.G2Affine
+	if err = dec.Decode(&betaG2); err != nil {
+		return err
+	}
+
+	// Verify contributions
+	var current Contribution
+	var prev Contribution
+	if header.Contributions == 1 {
+		prev, err = defaultContribution(transformedPath)
+		if err != nil {
+			return err
+		}
+	} else {
+		prev.ReadFrom(reader)
+	}
+	current.ReadFrom(reader)
+	fmt.Printf("the prev contribution %d with Hash := %s\n", header.Contributions-1, hex.EncodeToString(prev.Hash))
+	fmt.Printf("Verifying contribution %d with Hash := %s\n", header.Contributions, hex.EncodeToString(current.Hash))
+	if err := verifyContribution(current, prev); err != nil {
+		return err
+	}
+
+	// Verify consistency of parameters update
+	_, _, g1, g2 := bn254.Generators()
+	// Read and verify TauG1
+	//fmt.Println("Verifying powers of TauG1")
+	if !common.SameRatio(tau1L1, tau1L2, current.G2.Tau, g2) {
+		return errors.New("failed pairing check")
+	}
+
+	// Read and verify AlphaTauG1
+	//fmt.Println("Verifying powers of AlphaTauG1")
+	if !common.SameRatio(alphaTau1L1, alphaTau1L2, current.G2.Tau, g2) {
+		return errors.New("failed pairing check")
+	}
+
+	// Read and verify BetaTauG1
+	//fmt.Println("Verifying powers of BetaTauG1")
+	if !common.SameRatio(betaTau1L1, betaTau1L2, current.G2.Tau, g2) {
+		return errors.New("failed pairing check")
+	}
+
+	// Read and verify TauG2
+	//fmt.Println("Verifying powers of TauG2")
+	if !common.SameRatio(g1, current.G1.Tau, tau2L1, tau2L2) {
+		return errors.New("failed pairing check")
+	}
+
+	// Verify BetaG2
+	//fmt.Println("Verifying powers of BetaG2")
 	if !betaG2.Equal(&current.G2.Beta) {
 		return errors.New("failed verifying update of Beta")
 	}

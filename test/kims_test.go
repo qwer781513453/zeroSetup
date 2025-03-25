@@ -37,7 +37,7 @@ func TestSetup_kims(t *testing.T) {
 		//fmt.Println("one:", one.String())
 
 		start := time.Now()
-		contrihash, err := phase1.ContributeServer(from, to, tau, alpha, beta, one)
+		contrihash, err := phase1.ContributeServerAll(from, to, tau, alpha, beta, one)
 		if err != nil {
 			t.Error(err)
 			return // 出现错误时退出

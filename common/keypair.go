@@ -36,6 +36,27 @@ func GenPublicKey(x fr.Element, challenge []byte, dst byte) PublicKey {
 	return pk
 }
 
+func GenPublicKey_(x fr.Element, challenge []byte, dst byte, s *fr.Element) PublicKey {
+	var pk PublicKey
+	_, _, g1, _ := bn254.Generators()
+
+	var sBi big.Int
+	if s == nil {
+		var sTemp fr.Element
+		sTemp.SetRandom()
+		sTemp.BigInt(&sBi)
+	} else {
+		s.BigInt(&sBi)
+	}
+	pk.S.ScalarMultiplication(&g1, &sBi)
+	var xBi big.Int
+	x.BigInt(&xBi)
+	pk.SX.ScalarMultiplication(&pk.S, &xBi)
+	SP := GenSP(pk.S, pk.SX, challenge, dst)
+	pk.SPX.ScalarMultiplication(&SP, &xBi)
+	return pk
+}
+
 // Generate SP in G₂ as Hash(gˢ, gˢˣ, challenge, dst)
 func GenSP(sG1, sxG1 bn254.G1Affine, challenge []byte, dst byte) bn254.G2Affine {
 	buffer := append(sG1.Marshal()[:], sxG1.Marshal()...)
